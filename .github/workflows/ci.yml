@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint with Ruff
+        run: |
+          ruff check .
+
+      - name: Run test suite
+        run: |
+          pytest -q
+
+  docker:
+    name: Docker Build & Health Verification
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t fraud-anomaly:ci .
+
+      - name: Run Docker container
+        run: |
+          docker run -d --name fraud-service -p 8000:8000 fraud-anomaly:ci
+
+      - name: Verify health endpoint with retry loop
+        run: |
+          for i in {1..30}; do
+            if curl -s -f http://localhost:8000/health | grep '"status":"ok"'; then
+              echo "Healthcheck passed successfully!"
+              docker stop fraud-service
+              exit 0
+            fi
+            echo "Waiting for API to become ready ($i/30)..."
+            sleep 2
+          done
+          echo "Healthcheck failed. Dumping container logs:"
+          docker logs fraud-service
+          exit 1
